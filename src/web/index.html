@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Motion &amp; Tracking Optical Bench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :focus-visible {
+      outline: 2px solid #0f4c81;
+      outline-offset: 2px;
+    }
+  </style>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <h1 class="app-title">Motion &amp; Tracking Optical Bench</h1>
+      <span id="status-badge" class="status-badge status-standby" aria-live="polite">STANDBY</span>
+      <span id="active-mode-label" class="topbar-meta">Mode: Hybrid CVIP+DL</span>
+      <span id="active-source-label" class="topbar-meta">Source: Idle</span>
+    </div>
+    <nav class="topbar-exports" aria-label="Export telemetry">
+      <span class="export-label">Export:</span>
+      <a class="export-link" href="/api/export?format=csv" download>CSV</a>
+      <a class="export-link" href="/api/export?format=json" download>JSON</a>
+      <a class="export-link" href="/api/export?format=plot" download>Plot PNG</a>
+    </nav>
+  </header>
+
+  <main class="workbench">
+    <section class="stage" aria-label="Optical feed and track registry">
+      <div class="panel">
+        <div class="panel-header stage-header">
+          <div class="view-tabs" role="tablist" aria-label="Pipeline view selector">
+            <button type="button" class="tab-btn is-active" role="tab" aria-selected="true" data-view="annotated">Tracking Output</button>
+            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-view="quad">2x2 CVIP+DL Quad</button>
+            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-view="clahe">CLAHE Enhanced</button>
+            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-view="mog2">MOG2 Mask</button>
+            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-view="flow">Optical Flow</button>
+          </div>
+          <span id="stream-mode-indicator" class="stream-indicator">Stream: Standby</span>
+        </div>
+
+        <div class="viewport" id="viewport">
+          <img id="stream-feed" class="stream-feed" alt="Live tracking video stream" hidden>
+          <div id="standby-overlay" class="standby-overlay">
+            <p class="standby-title">Optical bench in standby</p>
+            <p class="standby-desc">Select an input source to stream annotated detections, background masks, and optical flow.</p>
+            <div class="standby-actions">
+              <button type="button" class="btn btn-primary" data-action="webcam">Start Webcam</button>
+              <button type="button" class="btn btn-secondary" data-action="sample">Run Sample Demo</button>
+            </div>
+            <p id="standby-error" class="standby-error" role="alert" hidden></p>
+          </div>
+        </div>
+      </div>
+
+      <section class="panel registry-panel" aria-label="Track registry">
+        <div class="panel-header">
+          <h2 class="panel-title">Track Registry</h2>
+          <span id="registry-count" class="panel-meta tabular">0 active</span>
+        </div>
+        <div class="table-wrap">
+          <table class="registry-table">
+            <thead>
+              <tr>
+                <th scope="col">ID</th>
+                <th scope="col">Class</th>
+                <th scope="col" class="num">Confidence</th>
+                <th scope="col" class="num">Velocity (px/f)</th>
+                <th scope="col" class="num">Age</th>
+                <th scope="col">State</th>
+              </tr>
+            </thead>
+            <tbody id="track-tbody">
+              <tr>
+                <td colspan="6" class="empty-cell">No active tracks. Start webcam or sample demo to populate registry.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <aside class="control-rail" aria-label="Pipeline controls and telemetry">
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Input Source</h2>
+        </div>
+        <div class="panel-body">
+          <div class="action-grid">
+            <button type="button" id="btn-webcam" class="btn btn-primary" data-action="webcam">Start Webcam</button>
+            <button type="button" id="btn-sample" class="btn btn-secondary" data-action="sample">Run Sample Demo</button>
+            <button type="button" id="btn-upload" class="btn btn-secondary">Upload Video</button>
+            <button type="button" id="btn-stop" class="btn btn-danger" data-action="stop" disabled>Stop</button>
+          </div>
+          <button type="button" id="btn-reset" class="btn btn-secondary btn-full" data-action="reset">Reset Tracker</button>
+          <input id="upload-input" type="file" accept=".mp4,.avi,.mov,.mkv,video/*" hidden>
+          <p id="control-feedback" class="control-feedback" role="status" aria-live="polite" hidden></p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Ablation Mode</h2>
+        </div>
+        <div class="panel-body">
+          <div class="segmented" role="radiogroup" aria-label="Tracking mode">
+            <button type="button" class="seg-btn is-active" role="radio" aria-checked="true" data-mode="hybrid">Hybrid CVIP+DL</button>
+            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-mode="dl_sort">DL SORT</button>
+            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-mode="cvip">CVIP MOG2</button>
+          </div>
+          <p id="mode-summary" class="mode-summary">CLAHE + Lucas-Kanade Optical Flow + YOLOv8 + Kalman/Hungarian + Re-ID</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Pipeline Parameters</h2>
+        </div>
+        <div class="panel-body stack-sm">
+          <label class="toggle-row" for="toggle-clahe">
+            <span>CLAHE Normalization</span>
+            <input id="toggle-clahe" type="checkbox" checked>
+          </label>
+          <label class="toggle-row" for="toggle-reid">
+            <span>Re-ID Appearance</span>
+            <input id="toggle-reid" type="checkbox" checked>
+          </label>
+          <label class="toggle-row" for="toggle-alerts">
+            <span>Email Alerts</span>
+            <input id="toggle-alerts" type="checkbox">
+          </label>
+
+          <div class="stride-block">
+            <span class="field-label" id="stride-label">Detection Stride (frames)</span>
+            <div class="segmented stride-group" role="radiogroup" aria-labelledby="stride-label">
+              <button type="button" class="seg-btn" role="radio" aria-checked="false" data-stride="1">1</button>
+              <button type="button" class="seg-btn is-active" role="radio" aria-checked="true" data-stride="2">2</button>
+              <button type="button" class="seg-btn" role="radio" aria-checked="false" data-stride="3">3</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Live Telemetry</h2>
+          <span id="frame-counter" class="panel-meta tabular">0 frames</span>
+        </div>
+        <div class="panel-body stack-sm">
+          <div class="kpi-grid">
+            <div class="kpi-cell">
+              <span class="kpi-label">Avg FPS</span>
+              <span id="kpi-fps" class="kpi-value tabular">0.0</span>
+            </div>
+            <div class="kpi-cell">
+              <span class="kpi-label">Latency ms</span>
+              <span id="kpi-latency" class="kpi-value tabular">0.0</span>
+            </div>
+            <div class="kpi-cell">
+              <span class="kpi-label">Active Tracks</span>
+              <span id="kpi-active" class="kpi-value tabular">0</span>
+            </div>
+            <div class="kpi-cell">
+              <span class="kpi-label">Total IDs</span>
+              <span id="kpi-total" class="kpi-value tabular">0</span>
+            </div>
+          </div>
+
+          <div class="chart-header">
+            <span class="chart-title">FPS &amp; Latency Strip (60 frames)</span>
+            <div class="chart-legend">
+              <span class="legend-item legend-fps">FPS</span>
+              <span class="legend-item legend-lat">Latency</span>
+            </div>
+          </div>
+          <div class="chart-frame">
+            <canvas id="metrics-chart" aria-label="Live FPS and latency strip chart"></canvas>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

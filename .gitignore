@@ -4,3 +4,13 @@
 /images/
 /.env
 
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Runtime output and downloaded model weights
+outputs/
+*.pt
+
