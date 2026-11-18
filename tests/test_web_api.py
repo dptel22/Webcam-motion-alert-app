@@ -1,5 +1,6 @@
 """Tests for TrackingSessionManager, Starlette web routes, and CLI argument parsing."""
 
+import asyncio
 from io import BytesIO
 import json
 from pathlib import Path
@@ -60,13 +61,20 @@ def _wait_for_frames(mgr: TrackingSessionManager, min_frames: int = 2, timeout: 
     return last_status
 
 
-def _step_coro(coro):
-    """Drive a pure coroutine to completion without spawning an OS socket event loop."""
-    try:
-        while True:
-            coro.send(None)
-    except StopIteration as stop:
-        return stop.value
+_LOOP = asyncio.new_event_loop()
+
+
+def _step_coro(awaitable):
+    """Run an awaitable to completion on a shared private event loop (no sockets).
+
+    A real loop is needed because handlers now offload JPEG encoding / blocking work
+    with asyncio.to_thread and MJPEG streams wait on loop-bound events.
+    """
+
+    async def _runner():
+        return await awaitable
+
+    return _LOOP.run_until_complete(_runner())
 
 
 def _make_request(
