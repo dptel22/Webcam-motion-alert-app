@@ -25,17 +25,28 @@ class YOLODetector:
         iou_threshold: float = 0.45,
         target_classes: list[int] | None = None,
         device: str = "cpu",
+        imgsz: int = 416,
     ) -> None:
         self.model_name = model_name
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.target_classes = target_classes
         self.device = device
+        self.imgsz = int(imgsz)
         self._model = None
+
+    @property
+    def is_loaded(self) -> bool:
+        """True once the YOLO weights have been loaded into memory."""
+        return self._model is not None
 
     def _ensure_model(self):
         if self._model is None:
             from ultralytics import YOLO
+
+            from src.dl import configure_torch_threads
+
+            configure_torch_threads()
 
             self._model = YOLO(self.model_name)
         return self._model
@@ -49,6 +60,7 @@ class YOLODetector:
             iou=self.iou_threshold,
             classes=self.target_classes,
             device=self.device,
+            imgsz=self.imgsz,
             verbose=False,
         )
         if not results:

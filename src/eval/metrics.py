@@ -31,59 +31,65 @@ class MetricsLogger:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._records: list[FrameMetrics] = []
+        self._reset_aggregates()
+
+    def _reset_aggregates(self) -> None:
+        # Running aggregates keep summary() O(#modes) instead of O(#frames); the
+        # dashboard polls it several times per second during long sessions.
+        self._sum_fps = 0.0
+        self._sum_latency = 0.0
+        self._peak_active = 0
+        self._max_created = 0
+        self._per_mode: dict[str, list[float]] = {}  # mode -> [frames, sum_fps, sum_latency]
 
     def record(self, metric: FrameMetrics) -> None:
         """Append a single frame's metric record."""
         with self._lock:
             self._records.append(metric)
+            self._sum_fps += metric.fps
+            self._sum_latency += metric.latency_ms
+            self._peak_active = max(self._peak_active, metric.active_tracks)
+            self._max_created = max(self._max_created, metric.total_tracks_created)
+            agg = self._per_mode.setdefault(metric.mode, [0, 0.0, 0.0])
+            agg[0] += 1
+            agg[1] += metric.fps
+            agg[2] += metric.latency_ms
 
     def clear(self) -> None:
         """Clear all recorded metrics."""
         with self._lock:
             self._records.clear()
+            self._reset_aggregates()
 
     def summary(self) -> dict[str, Any]:
         """Compute aggregate benchmark metrics across all recorded frames and modes."""
         with self._lock:
-            records = list(self._records)
-
-        total_frames = len(records)
-        if total_frames == 0:
+            total_frames = len(self._records)
+            if total_frames == 0:
+                return {
+                    "total_frames": 0,
+                    "avg_fps": 0.0,
+                    "avg_latency_ms": 0.0,
+                    "peak_active_tracks": 0,
+                    "total_tracks_created": 0,
+                    "per_mode": {},
+                }
+            per_mode = {
+                mode_name: {
+                    "frames": int(count),
+                    "avg_fps": sum_fps / count if count > 0 else 0.0,
+                    "avg_latency_ms": sum_lat / count if count > 0 else 0.0,
+                }
+                for mode_name, (count, sum_fps, sum_lat) in self._per_mode.items()
+            }
             return {
-                "total_frames": 0,
-                "avg_fps": 0.0,
-                "avg_latency_ms": 0.0,
-                "peak_active_tracks": 0,
-                "total_tracks_created": 0,
-                "per_mode": {},
+                "total_frames": total_frames,
+                "avg_fps": self._sum_fps / total_frames,
+                "avg_latency_ms": self._sum_latency / total_frames,
+                "peak_active_tracks": self._peak_active,
+                "total_tracks_created": self._max_created,
+                "per_mode": per_mode,
             }
-
-        avg_fps = sum(m.fps for m in records) / total_frames
-        avg_latency_ms = sum(m.latency_ms for m in records) / total_frames
-        peak_active_tracks = max(m.active_tracks for m in records)
-        total_tracks_created = max(m.total_tracks_created for m in records)
-
-        modes: dict[str, list[FrameMetrics]] = {}
-        for m in records:
-            modes.setdefault(m.mode, []).append(m)
-
-        per_mode: dict[str, dict[str, Any]] = {}
-        for mode_name, mode_records in modes.items():
-            count = len(mode_records)
-            per_mode[mode_name] = {
-                "frames": count,
-                "avg_fps": sum(m.fps for m in mode_records) / count if count > 0 else 0.0,
-                "avg_latency_ms": sum(m.latency_ms for m in mode_records) / count if count > 0 else 0.0,
-            }
-
-        return {
-            "total_frames": total_frames,
-            "avg_fps": avg_fps,
-            "avg_latency_ms": avg_latency_ms,
-            "peak_active_tracks": peak_active_tracks,
-            "total_tracks_created": total_tracks_created,
-            "per_mode": per_mode,
-        }
 
     def recent(self, limit: int = 60) -> list[dict[str, Any]]:
         """Return the last N records as plain dictionaries for UI/dashboard feeds."""

@@ -7,9 +7,9 @@ from enum import Enum
 class TrackingMode(str, Enum):
     """Selectable tracking pipeline modes for live ablation and comparison."""
 
-    CVIP_MOG2 = "cvip"       # Classical CVIP only: CLAHE + MOG2 + Kalman + Hungarian IoU
-    DL_SORT = "dl_sort"      # DL Detector (YOLO) + Kalman + Hungarian IoU
-    HYBRID = "hybrid"        # Full CVIP + DL: CLAHE + Optical Flow + YOLO + Kalman + Re-ID
+    CVIP_MOG2 = "cvip"       # CVIP project: CLAHE + MOG2 + contours + Kalman/Hungarian IoU + LK flow (no DL)
+    DL_SORT = "dl_sort"      # DL project: YOLOv8 + MobileNetV3 Re-ID + Kalman/Hungarian (no CVIP stages)
+    HYBRID = "hybrid"        # Combined: CLAHE + Optical Flow + YOLO + Kalman + Re-ID
 
     @classmethod
     def cycle_order(cls) -> list["TrackingMode"]:
@@ -34,6 +34,7 @@ class TrackerConfig:
     save_video: str | None = None
     metrics_dir: str = "outputs"
     max_frames: int | None = None
+    max_frame_width: int = 960  # wider inputs are downscaled before processing
 
     # CVIP preprocessing & background subtraction
     use_clahe: bool = True
@@ -46,6 +47,7 @@ class TrackerConfig:
 
     # Deep Learning detector & Re-ID
     detector_model: str = "yolov8n.pt"
+    detector_imgsz: int = 416
     conf_threshold: float = 0.35
     iou_threshold: float = 0.45
     detect_interval: int = 2

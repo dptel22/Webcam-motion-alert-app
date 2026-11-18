@@ -24,8 +24,16 @@ class ReIDExtractor:
         self.pretrained = pretrained
         self._model = None
 
+    @property
+    def is_loaded(self) -> bool:
+        """True once the MobileNetV3 weights have been loaded into memory."""
+        return self._model is not None
+
     def _ensure_model(self) -> torch.nn.Module:
         if self._model is None:
+            from src.dl import configure_torch_threads
+
+            configure_torch_threads()
             from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
 
             weights = MobileNet_V3_Small_Weights.DEFAULT if self.pretrained else None
@@ -72,7 +80,7 @@ class ReIDExtractor:
 
         model = self._ensure_model()
         batch = torch.from_numpy(np.stack(tensors, axis=0)).to(self.device)
-        with torch.no_grad():
+        with torch.inference_mode():
             features = model.features(batch)
             pooled = model.avgpool(features)
             flattened = torch.flatten(pooled, 1)

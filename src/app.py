@@ -54,7 +54,11 @@ def _open_cli_capture(config: TrackerConfig) -> cv2.VideoCapture:
             generate_sample_video(sample_path)
         return cv2.VideoCapture(str(sample_path))
     if config.source.isdigit():
-        return cv2.VideoCapture(int(config.source))
+        cap = cv2.VideoCapture(int(config.source))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # always process the newest frame
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        return cap
     return cv2.VideoCapture(config.source)
 
 
