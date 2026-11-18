@@ -222,7 +222,9 @@ class MultiObjectTracker:
         for track in self.tracks:
             track.predict()
 
-        use_reid = mode == TrackingMode.HYBRID
+        # Re-ID appearance cost is fused whenever detections carry embeddings (DL_SORT and
+        # HYBRID). CVIP motion blobs never have embeddings, so it is IoU-only there.
+        use_reid = mode != TrackingMode.CVIP_MOG2
         unmatched_dets = set(range(len(detections)))
 
         if self.tracks and detections:
@@ -258,6 +260,18 @@ class MultiObjectTracker:
         # Do not drop tentative tracks on non-keyframe flow steps before next detector check.
         self._prune_stale_tracks(drop_tentative=False)
         return self.active_tracks()
+
+    def step_predict(self) -> list[Track]:
+        """Advance all tracks with Kalman prediction only (no detector, no measurement).
+
+        Used on non-detection frames in DL_SORT mode (detect_interval > 1). Confirmed tracks
+        coast on their predicted boxes; nothing is pruned until the next detection step.
+        """
+        for track in self.tracks:
+            track.predict()
+            if track.state == TrackState.CONFIRMED:
+                track._record_center(track.bbox())
+        return [t for t in self.tracks if t.state == TrackState.CONFIRMED]
 
     def active_tracks(self) -> list[Track]:
         """Return currently confirmed tracks visible in the current frame."""

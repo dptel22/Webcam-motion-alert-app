@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from email.message import EmailMessage
+import itertools
 import os
 from pathlib import Path
 import smtplib
@@ -42,6 +43,37 @@ def detect_image_subtype(data: bytes, fallback: str = "octet-stream") -> str:
     return fallback
 
 
+def resolve_receiver(receiver: str | None = None) -> str:
+    """Resolve the alert recipient the same way build_email_message does."""
+    return receiver or os.getenv("EMAIL_RECEIVER") or DEFAULT_RECEIVER
+
+
+def mask_email(address: str) -> str:
+    """Mask an email address for display, e.g. "dptel07@gmail.com" -> "dp•••@gmail.com"."""
+    address = (address or "").strip()
+    local, sep, domain = address.partition("@")
+    masked_local = local[:2] + "•••"
+    return f"{masked_local}@{domain}" if sep else masked_local
+
+
+def is_email_configured() -> bool:
+    """Return True when GOOGLE_APP_PASSWORD is present and non-empty."""
+    return bool((os.getenv("GOOGLE_APP_PASSWORD") or "").strip())
+
+
+def _encode_preview_jpeg(frame, max_width: int = 480) -> bytes | None:
+    """Downscale a frame so width <= max_width and encode as JPEG bytes."""
+    try:
+        h, w = frame.shape[:2]
+        if w > max_width:
+            new_h = max(1, int(round(h * max_width / float(w))))
+            frame = cv2.resize(frame, (max_width, new_h), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        return buf.tobytes() if ok else None
+    except Exception:
+        return None
+
+
 def build_email_message(
     image_path: str | Path,
     sender: str | None = None,
@@ -51,7 +83,7 @@ def build_email_message(
 ) -> EmailMessage:
     """Build an EmailMessage with an attached image and appropriate MIME subtype."""
     resolved_sender = sender or os.getenv("EMAIL_SENDER") or DEFAULT_SENDER
-    resolved_receiver = receiver or os.getenv("EMAIL_RECEIVER") or DEFAULT_RECEIVER
+    resolved_receiver = resolve_receiver(receiver)
 
     path = Path(image_path)
     content = path.read_bytes()
@@ -121,6 +153,54 @@ class AlertManager:
         self.last_trigger_time: float = -float("inf")
         self._last_thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._history_lock = threading.Lock()
+        self._history: list[dict] = []
+        self._id_counter = itertools.count(1)
+
+    HISTORY_LIMIT = 20
+
+    def _add_record(self, frame, test: bool) -> dict:
+        record = {
+            "id": next(self._id_counter),
+            "time": time.time(),
+            "status": "sending",
+            "error": None,
+            "test": bool(test),
+            "snapshot": _encode_preview_jpeg(frame),
+        }
+        with self._history_lock:
+            self._history.insert(0, record)
+            del self._history[self.HISTORY_LIMIT :]
+        return record
+
+    def _update_record(self, record_id: int, **fields) -> None:
+        with self._history_lock:
+            for rec in self._history:
+                if rec["id"] == record_id:
+                    rec.update(fields)
+                    return
+
+    def history(self) -> list[dict]:
+        """Return a newest-first copy of alert records (without snapshot bytes)."""
+        with self._history_lock:
+            return [
+                {k: v for k, v in rec.items() if k != "snapshot"} | {"has_snapshot": rec["snapshot"] is not None}
+                for rec in self._history
+            ]
+
+    def get_snapshot(self, record_id: int) -> bytes | None:
+        """Return in-memory JPEG snapshot bytes for an alert record, or None."""
+        with self._history_lock:
+            for rec in self._history:
+                if rec["id"] == record_id:
+                    return rec["snapshot"]
+        return None
+
+    def cooldown_remaining(self) -> float:
+        """Seconds until the next non-test alert may fire (0.0 if ready)."""
+        with self._lock:
+            elapsed = time.monotonic() - self.last_trigger_time
+        return max(0.0, self.cooldown_sec - elapsed)
 
     def cleanup_old_snapshots(self, exclude: Path | None = None) -> list[Path]:
         """Safely delete old snapshot files while strictly preserving the active snapshot."""
@@ -140,12 +220,50 @@ class AlertManager:
                     pass
         return cleaned
 
-    def _process_alert(self, snapshot_path: Path) -> None:
-        """Execute sender_fn, then clean up old snapshots without racing the active snapshot."""
+    def _process_alert(self, snapshot_path: Path, record_id: int | None = None) -> None:
+        """Execute sender_fn, record the outcome, then clean up old snapshots.
+
+        Exceptions from sender_fn are caught and recorded as a "failed" history entry
+        instead of being lost in the background thread.
+        """
         try:
             self.sender_fn(str(snapshot_path))
+        except Exception as exc:
+            if record_id is not None:
+                self._update_record(record_id, status="failed", error=str(exc) or type(exc).__name__)
+        else:
+            if record_id is not None:
+                self._update_record(record_id, status="sent", error=None)
         finally:
             self.cleanup_old_snapshots(exclude=snapshot_path)
+
+    def _dispatch(self, frame, blocking: bool, test: bool) -> bool:
+        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = int(time.time() * 1000)
+        prefix = "test_" if test else "alert_"
+        snapshot_path = self.snapshot_dir / f"{prefix}{timestamp}.png"
+
+        if not cv2.imwrite(str(snapshot_path), frame):
+            return False
+
+        record = self._add_record(frame, test=test)
+        if blocking:
+            self._process_alert(snapshot_path, record["id"])
+        else:
+            thread = threading.Thread(
+                target=self._process_alert,
+                args=(snapshot_path, record["id"]),
+                daemon=True,
+            )
+            self._last_thread = thread
+            thread.start()
+        return True
+
+    def send_test(self, frame, blocking: bool = False) -> bool:
+        """Send a test alert, bypassing the enabled flag and cooldown (recorded with test=True)."""
+        if frame is None:
+            return False
+        return self._dispatch(frame, blocking=blocking, test=True)
 
     def trigger(self, frame, blocking: bool = False) -> bool:
         """Trigger an alert for a motion frame.
@@ -164,25 +282,7 @@ class AlertManager:
                 return False
             self.last_trigger_time = now
 
-        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = int(time.time() * 1000)
-        snapshot_path = self.snapshot_dir / f"alert_{timestamp}.png"
-
-        if not cv2.imwrite(str(snapshot_path), frame):
-            return False
-
-        if blocking:
-            self._process_alert(snapshot_path)
-        else:
-            thread = threading.Thread(
-                target=self._process_alert,
-                args=(snapshot_path,),
-                daemon=True,
-            )
-            self._last_thread = thread
-            thread.start()
-
-        return True
+        return self._dispatch(frame, blocking=blocking, test=False)
 
     def wait(self, timeout: float | None = 5.0) -> None:
         """Wait for any active background alert thread to finish."""

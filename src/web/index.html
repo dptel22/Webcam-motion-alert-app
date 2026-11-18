@@ -3,189 +3,184 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Motion &amp; Tracking Optical Bench</title>
+  <title>Live Tracking</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <style>
-    :focus-visible {
-      outline: 2px solid #0f4c81;
-      outline-offset: 2px;
-    }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="topbar-left">
-      <h1 class="app-title">Motion &amp; Tracking Optical Bench</h1>
-      <span id="status-badge" class="status-badge status-standby" aria-live="polite">STANDBY</span>
-      <span id="active-mode-label" class="topbar-meta">Mode: Hybrid CVIP+DL</span>
-      <span id="active-source-label" class="topbar-meta">Source: Idle</span>
+  <header class="mast">
+    <div class="mast-line">
+      <div class="mast-title">
+        <h1>Live Tracking</h1>
+      </div>
+      <div class="mast-meta">
+        <span class="status" id="status" data-state="stopped" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-word">Stopped</span>
+        </span>
+        <span class="meta-sep" aria-hidden="true">/</span>
+        <span id="source-label" class="source-label">No source</span>
+        <span class="meta-sep" aria-hidden="true">/</span>
+        <nav class="exports" aria-label="Export metrics">
+          <span class="exports-label">Export</span>
+          <a href="/api/export?format=csv" download>CSV</a><span aria-hidden="true"> &middot; </span><a href="/api/export?format=json" download>JSON</a><span aria-hidden="true"> &middot; </span><a href="/api/export?format=plot" download>Plot</a>
+        </nav>
+      </div>
     </div>
-    <nav class="topbar-exports" aria-label="Export telemetry">
-      <span class="export-label">Export:</span>
-      <a class="export-link" href="/api/export?format=csv" download>CSV</a>
-      <a class="export-link" href="/api/export?format=json" download>JSON</a>
-      <a class="export-link" href="/api/export?format=plot" download>Plot PNG</a>
-    </nav>
+
   </header>
 
-  <main class="workbench">
-    <section class="stage" aria-label="Optical feed and track registry">
-      <div class="panel">
-        <div class="panel-header stage-header">
-          <div class="view-tabs" role="tablist" aria-label="Pipeline view selector">
-            <button type="button" class="tab-btn is-active" role="tab" aria-selected="true" data-view="annotated">Tracking Output</button>
-            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-view="quad">2x2 CVIP+DL Quad</button>
-            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-view="clahe">CLAHE Enhanced</button>
-            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-view="mog2">MOG2 Mask</button>
-            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-view="flow">Optical Flow</button>
-          </div>
-          <span id="stream-mode-indicator" class="stream-indicator">Stream: Standby</span>
-        </div>
-
-        <div class="viewport" id="viewport">
-          <img id="stream-feed" class="stream-feed" alt="Live tracking video stream" hidden>
-          <div id="standby-overlay" class="standby-overlay">
-            <p class="standby-title">Optical bench in standby</p>
-            <p class="standby-desc">Select an input source to stream annotated detections, background masks, and optical flow.</p>
+  <main class="layout">
+    <div class="main-col">
+      <figure class="viewer">
+        <div class="frame" id="frame">
+          <img id="main-img" class="main-img" alt="" hidden>
+          <div class="standby" id="standby">
+            <p class="standby-title">Camera is off.</p>
+            <p class="standby-text">Start the webcam to begin tracking. Every frame passes through the stages shown below.</p>
             <div class="standby-actions">
-              <button type="button" class="btn btn-primary" data-action="webcam">Start Webcam</button>
-              <button type="button" class="btn btn-secondary" data-action="sample">Run Sample Demo</button>
+              <button type="button" class="btn btn-primary" data-action="webcam">Start webcam</button>
+              <button type="button" class="btn" data-action="sample">Play sample clip</button>
             </div>
-            <p id="standby-error" class="standby-error" role="alert" hidden></p>
           </div>
         </div>
-      </div>
+        <figcaption class="caption" id="main-caption"></figcaption>
+        <p class="error-line" id="error-line" role="alert" hidden></p>
+      </figure>
 
-      <section class="panel registry-panel" aria-label="Track registry">
-        <div class="panel-header">
-          <h2 class="panel-title">Track Registry</h2>
-          <span id="registry-count" class="panel-meta tabular">0 active</span>
+      <section class="pipeline" aria-labelledby="pipeline-h">
+        <div class="sec-head">
+          <h2 id="pipeline-h">Pipeline</h2>
+          <span class="sec-note">Each frame flows left to right. Click a stage to show it above.</span>
+          <button type="button" class="textbtn" id="compare-btn" aria-pressed="false">Compare all</button>
         </div>
-        <div class="table-wrap">
-          <table class="registry-table">
-            <thead>
-              <tr>
-                <th scope="col">ID</th>
-                <th scope="col">Class</th>
-                <th scope="col" class="num">Confidence</th>
-                <th scope="col" class="num">Velocity (px/f)</th>
-                <th scope="col" class="num">Age</th>
-                <th scope="col">State</th>
-              </tr>
-            </thead>
-            <tbody id="track-tbody">
-              <tr>
-                <td colspan="6" class="empty-cell">No active tracks. Start webcam or sample demo to populate registry.</td>
-              </tr>
-            </tbody>
-          </table>
+        <ol class="strip" id="strip" aria-label="Pipeline stages"></ol>
+      </section>
+
+      <section class="cost" id="cost" aria-labelledby="cost-h" hidden>
+        <div class="sec-head">
+          <h2 id="cost-h">Stage cost</h2>
+          <span class="sec-note">Milliseconds spent per frame in each stage. Stages that do not run take no time.</span>
+        </div>
+        <div class="cost-row">
+          <div class="cost-bar" id="cost-bar" role="img" aria-label="Stage cost"></div>
+          <span class="cost-total" id="cost-total"></span>
+          <div class="cost-labels" id="cost-labels" aria-hidden="true"></div>
         </div>
       </section>
-    </section>
+    </div>
 
-    <aside class="control-rail" aria-label="Pipeline controls and telemetry">
-      <section class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">Input Source</h2>
+    <aside class="side" aria-label="Controls and readings">
+      <section class="block" aria-labelledby="src-h">
+        <h2 id="src-h">Source</h2>
+        <div class="src-grid">
+          <button type="button" class="btn btn-primary" data-action="webcam">Start webcam</button>
+          <button type="button" class="btn" data-action="sample">Play sample clip</button>
+          <button type="button" class="btn" id="upload-btn">Upload video&hellip;</button>
+          <button type="button" class="btn" data-action="stop" id="stop-btn" disabled>Stop</button>
         </div>
-        <div class="panel-body">
-          <div class="action-grid">
-            <button type="button" id="btn-webcam" class="btn btn-primary" data-action="webcam">Start Webcam</button>
-            <button type="button" id="btn-sample" class="btn btn-secondary" data-action="sample">Run Sample Demo</button>
-            <button type="button" id="btn-upload" class="btn btn-secondary">Upload Video</button>
-            <button type="button" id="btn-stop" class="btn btn-danger" data-action="stop" disabled>Stop</button>
+        <button type="button" class="textbtn reset-btn" data-action="reset">Reset tracker</button>
+        <input id="upload-input" type="file" accept=".mp4,.avi,.mov,.mkv,video/*" hidden>
+        <p class="feedback" id="feedback" role="status" aria-live="polite" hidden></p>
+      </section>
+
+      <section class="block" aria-labelledby="set-h">
+        <h2 id="set-h">Settings</h2>
+        <div class="method-block">
+          <span class="setting-name" id="method-label">Tracking method</span>
+          <div class="method" role="radiogroup" aria-labelledby="method-label" id="preset-group">
+            <button type="button" role="radio" aria-checked="false" data-preset="cvip">Motion</button>
+            <button type="button" role="radio" aria-checked="false" data-preset="dl">Objects</button>
+            <button type="button" role="radio" aria-checked="false" data-preset="combined">Hybrid</button>
           </div>
-          <button type="button" id="btn-reset" class="btn btn-secondary btn-full" data-action="reset">Reset Tracker</button>
-          <input id="upload-input" type="file" accept=".mp4,.avi,.mov,.mkv,video/*" hidden>
-          <p id="control-feedback" class="control-feedback" role="status" aria-live="polite" hidden></p>
+          <p class="setting-hint method-desc" id="preset-desc" aria-live="polite"></p>
         </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">Ablation Mode</h2>
-        </div>
-        <div class="panel-body">
-          <div class="segmented" role="radiogroup" aria-label="Tracking mode">
-            <button type="button" class="seg-btn is-active" role="radio" aria-checked="true" data-mode="hybrid">Hybrid CVIP+DL</button>
-            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-mode="dl_sort">DL SORT</button>
-            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-mode="cvip">CVIP MOG2</button>
+        <div class="setting" data-for="cvip hybrid" id="set-clahe">
+          <div class="setting-text">
+            <span class="setting-name" id="clahe-label">Contrast enhancement (CLAHE)</span>
+            <span class="setting-hint">Equalises brightness locally so shadows and glare matter less.</span>
           </div>
-          <p id="mode-summary" class="mode-summary">CLAHE + Lucas-Kanade Optical Flow + YOLOv8 + Kalman/Hungarian + Re-ID</p>
+          <button type="button" class="switch" role="switch" aria-checked="false" aria-labelledby="clahe-label" data-setting="use_clahe"><span class="switch-knob"></span></button>
         </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">Pipeline Parameters</h2>
+        <div class="setting" data-for="dl_sort hybrid" id="set-reid">
+          <div class="setting-text">
+            <span class="setting-name" id="reid-label">Re-ID appearance matching</span>
+            <span class="setting-hint">MobileNetV3 features keep IDs stable when objects cross.</span>
+          </div>
+          <button type="button" class="switch" role="switch" aria-checked="false" aria-labelledby="reid-label" data-setting="use_reid"><span class="switch-knob"></span></button>
         </div>
-        <div class="panel-body stack-sm">
-          <label class="toggle-row" for="toggle-clahe">
-            <span>CLAHE Normalization</span>
-            <input id="toggle-clahe" type="checkbox" checked>
-          </label>
-          <label class="toggle-row" for="toggle-reid">
-            <span>Re-ID Appearance</span>
-            <input id="toggle-reid" type="checkbox" checked>
-          </label>
-          <label class="toggle-row" for="toggle-alerts">
-            <span>Email Alerts</span>
-            <input id="toggle-alerts" type="checkbox">
-          </label>
-
-          <div class="stride-block">
-            <span class="field-label" id="stride-label">Detection Stride (frames)</span>
-            <div class="segmented stride-group" role="radiogroup" aria-labelledby="stride-label">
-              <button type="button" class="seg-btn" role="radio" aria-checked="false" data-stride="1">1</button>
-              <button type="button" class="seg-btn is-active" role="radio" aria-checked="true" data-stride="2">2</button>
-              <button type="button" class="seg-btn" role="radio" aria-checked="false" data-stride="3">3</button>
-            </div>
+        <div class="setting" data-for="dl_sort hybrid" id="set-interval">
+          <div class="setting-text">
+            <span class="setting-name" id="interval-label">Detect every N frames</span>
+            <span class="setting-hint">Run YOLO less often; tracking fills the gaps. Higher is faster.</span>
+          </div>
+          <div class="seg" role="radiogroup" aria-labelledby="interval-label">
+            <button type="button" role="radio" aria-checked="false" data-interval="1">1</button>
+            <button type="button" role="radio" aria-checked="false" data-interval="2">2</button>
+            <button type="button" role="radio" aria-checked="false" data-interval="3">3</button>
           </div>
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">Live Telemetry</h2>
-          <span id="frame-counter" class="panel-meta tabular">0 frames</span>
+      <section class="block" aria-labelledby="num-h">
+        <h2 id="num-h">Numbers</h2>
+        <dl class="nums">
+          <div><dt>FPS</dt><dd id="n-fps">&ndash;</dd></div>
+          <div><dt>Latency, ms</dt><dd id="n-lat">&ndash;</dd></div>
+          <div><dt>Objects now</dt><dd id="n-now">0</dd></div>
+          <div><dt>Total IDs</dt><dd id="n-total">0</dd></div>
+        </dl>
+        <div class="chart-wrap">
+          <canvas id="chart" class="chart" role="img" aria-label="FPS and latency over the last 60 frames"></canvas>
+          <p class="chart-legend"><span class="lg lg-fps">FPS</span><span class="lg lg-lat">latency</span><span class="lg-note">last 60 frames</span></p>
         </div>
-        <div class="panel-body stack-sm">
-          <div class="kpi-grid">
-            <div class="kpi-cell">
-              <span class="kpi-label">Avg FPS</span>
-              <span id="kpi-fps" class="kpi-value tabular">0.0</span>
-            </div>
-            <div class="kpi-cell">
-              <span class="kpi-label">Latency ms</span>
-              <span id="kpi-latency" class="kpi-value tabular">0.0</span>
-            </div>
-            <div class="kpi-cell">
-              <span class="kpi-label">Active Tracks</span>
-              <span id="kpi-active" class="kpi-value tabular">0</span>
-            </div>
-            <div class="kpi-cell">
-              <span class="kpi-label">Total IDs</span>
-              <span id="kpi-total" class="kpi-value tabular">0</span>
-            </div>
-          </div>
+      </section>
 
-          <div class="chart-header">
-            <span class="chart-title">FPS &amp; Latency Strip (60 frames)</span>
-            <div class="chart-legend">
-              <span class="legend-item legend-fps">FPS</span>
-              <span class="legend-item legend-lat">Latency</span>
-            </div>
-          </div>
-          <div class="chart-frame">
-            <canvas id="metrics-chart" aria-label="Live FPS and latency strip chart"></canvas>
-          </div>
+      <section class="block" aria-labelledby="obj-h">
+        <h2 id="obj-h">Objects <span class="h-count" id="obj-count"></span></h2>
+        <ul class="tracks" id="tracks"></ul>
+        <p class="empty" id="tracks-empty">Start the webcam to see tracks.</p>
+      </section>
+
+      <section class="block" aria-labelledby="mail-h" id="alerts">
+        <div class="mail-head">
+          <h2 id="mail-h">Email alerts</h2>
+          <button type="button" class="switch" role="switch" aria-checked="false" aria-labelledby="mail-h" id="alert-switch"><span class="switch-knob"></span></button>
+        </div>
+        <p class="mail-state" id="mail-state">Off &mdash; no emails will be sent.</p>
+        <p class="mail-note" id="mail-cvip-note" hidden>In Motion mode everything is labelled &lsquo;motion&rsquo;, so person alerts won&rsquo;t fire.</p>
+        <p class="mail-warn" id="mail-warn" hidden>Email isn&rsquo;t configured &mdash; set GOOGLE_APP_PASSWORD in .env and restart.</p>
+        <div class="cooldown" id="cooldown" hidden>
+          <span class="cooldown-label">Cooldown</span>
+          <span class="cooldown-track"><span class="cooldown-fill" id="cooldown-fill"></span></span>
+          <span class="cooldown-num" id="cooldown-num"></span>
+        </div>
+        <div class="mail-actions">
+          <button type="button" class="btn" id="test-btn">Send test alert</button>
+          <span class="test-result" id="test-result" role="status" aria-live="polite"></span>
+        </div>
+        <div id="history-wrap">
+          <h3 class="sub-h">History</h3>
+          <ul class="history" id="history"></ul>
+          <p class="empty" id="history-empty">No alerts yet.</p>
         </div>
       </section>
     </aside>
   </main>
+
+  <footer class="keys">
+    Keys: <kbd>M</kbd> method &middot; <kbd>1</kbd>&ndash;<kbd>5</kbd> stage &middot; <kbd>Space</kbd> start / stop webcam
+  </footer>
+
+  <dialog class="snap-dialog" id="snap-dialog" aria-label="Alert snapshot">
+    <figure>
+      <img id="snap-img" alt="">
+      <figcaption class="caption" id="snap-caption"></figcaption>
+    </figure>
+    <form method="dialog"><button type="submit" class="textbtn">Close</button></form>
+  </dialog>
 
   <script src="/static/app.js"></script>
 </body>
