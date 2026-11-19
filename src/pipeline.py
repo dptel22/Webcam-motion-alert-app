@@ -12,6 +12,7 @@ Visual panels are rendered lazily (only the view a client asks for is ever drawn
 per-frame snapshots, so drawing and JPEG encoding never need the pipeline lock.
 """
 
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 import threading
@@ -353,6 +354,7 @@ class TrackingPipeline:
         self.frame_idx = 0
         self._prev_gray: np.ndarray | None = None
         self._start_time: float | None = None
+        self._frame_times: deque[float] = deque(maxlen=15)
         self._last_detections: list[Detection] = []
         self._last_detect_idx: int | None = None
         self.last_stage_ms: dict[str, float] = {}
@@ -445,6 +447,7 @@ class TrackingPipeline:
             self._prev_gray = None
             self.frame_idx = 0
             self._start_time = None
+            self._frame_times.clear()
             self._last_detections = []
             self._last_detect_idx = None
             self.last_stage_ms = {}
@@ -619,11 +622,22 @@ class TrackingPipeline:
 
             t1 = time.perf_counter()
             latency_ms = (t1 - t0) * 1000.0
+            # FPS is the real frame rate over a rolling window of recent frames
+            # (wall clock, so it includes capture and pacing). Using 1/processing-time
+            # made cheap frames (Kalman-only frames between detections) report
+            # absurd values, and per-frame intervals alternate wildly with
+            # detect_interval > 1.
+            self._frame_times.append(t1)
+            if len(self._frame_times) >= 2:
+                span = max(self._frame_times[-1] - self._frame_times[0], 1e-3)
+                fps = (len(self._frame_times) - 1) / span
+            else:
+                fps = 1000.0 / max(latency_ms, 1.0)
             metric = FrameMetrics(
                 frame_idx=self.frame_idx,
                 timestamp_sec=t1 - self._start_time,
                 mode=mode.value,
-                fps=1000.0 / max(latency_ms, 1e-3),
+                fps=fps,
                 latency_ms=latency_ms,
                 active_tracks=len(active_tracks),
                 detections_count=detections_count,

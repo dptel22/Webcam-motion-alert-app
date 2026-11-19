@@ -105,13 +105,16 @@ def test_pipeline_dl_sort_mode_uses_detector_and_returns_track_rows() -> None:
         ]
 
     det = _FakeDetector(scripted)
-    cfg = TrackerConfig(mode=TrackingMode.DL_SORT, min_hits=2)
-    pipeline = TrackingPipeline(cfg, detector=det)
+    reid = _FakeReID()
+    # detect_interval=1: DL_SORT now honours detect_interval (Kalman-predict-only in between).
+    cfg = TrackerConfig(mode=TrackingMode.DL_SORT, min_hits=2, detect_interval=1)
+    pipeline = TrackingPipeline(cfg, detector=det, reid=reid)
 
     for frame in _make_sequence(num_frames=5):
         res = pipeline.process_frame(frame)
 
     assert det.calls == 5
+    assert reid.calls == 5  # DL_SORT now fuses Re-ID embeddings too
     assert len(res.tracks) == 1
     rows = pipeline.get_track_rows()
     assert len(rows) == 1
@@ -189,7 +192,7 @@ def test_pipeline_alerts_trigger_only_for_matching_classes(tmp_path: Path) -> No
         enable_alerts=True,
         alert_classes=["person"],
     )
-    pipeline = TrackingPipeline(cfg, detector=car_det, alert_manager=alert_mgr)
+    pipeline = TrackingPipeline(cfg, detector=car_det, reid=_FakeReID(), alert_manager=alert_mgr)
     pipeline.process_frame(_make_sequence(1)[0])
     alert_mgr.wait(timeout=2.0)
     assert len(sent) == 0
